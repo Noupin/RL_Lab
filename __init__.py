@@ -9,7 +9,9 @@ match arg:
     print("Kindistry")
 
   case 'eev':
+    from eev.env import run as eev_run
     print("eev")
+    eev_run()
 
   case _:
     print(Fore.RED, 'Invalid argument: ', Fore.RESET, arg)

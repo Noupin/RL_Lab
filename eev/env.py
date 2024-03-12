@@ -15,7 +15,7 @@ partial_energy_conversion_rate = 0.5
 partial_energy_loss_rate = 0.6
 energy_cost_of_eating = 0.2
 mutation_rate = 0.005  # 0.5% chance of mutation
-raycast_distance = 3  # Distance for raycasting
+raycast_distance = 1  # Distance for raycasting
 size_ratio_threshold = 0.75
 base_energy_transfer = 5.0
 
@@ -44,6 +44,7 @@ class Cell:
     self.max_size = 10
     self.position = position
     self.direction = None  # Initialize direction
+    self.is_docked = False
 
   def create_network(self):
     model = keras.Sequential([
@@ -95,14 +96,36 @@ class Cell:
         self.dock(environment)
 
   def move(self, direction, environment: "EevEnvironment"):
-    # Base movement distance is 1; it's scaled by the movement weight
-    # Convert weight to integer multiplier
     movement_distance = int(self.action_weights[0])
 
-    x, y = self.position
-    old_pos = self.position
+    if self.is_docked:
+      # If part of a multicellular organism, handle collective movement
+      self.handle_multicell_movement(direction, movement_distance, environment)
+    else:
+      # Individual cell movement
+      self.execute_individual_movement(
+        direction, movement_distance, environment)
 
-    # Update position based on direction and movement distance
+  def execute_individual_movement(self, direction, movement_distance, environment: "EevEnvironment"):
+    # Calculate new position based on direction and movement distance
+    new_x, new_y = self.calculate_new_position(
+      direction, movement_distance, environment)
+    # Update position and environment grid
+    self.update_position((new_x, new_y), environment)
+
+  def handle_multicell_movement(self, direction, movement_distance, environment: "EevEnvironment"):
+    # Calculate new position for the organism
+    new_x, new_y = self.calculate_new_position(
+      direction, movement_distance, environment)
+
+    # Find the organism to which this cell belongs
+    organism_root = environment.find(self)
+    # Apply this movement to each cell in the organism
+    for cell in environment.get_organism_cells(organism_root):
+      cell.update_position((new_x, new_y), environment)
+
+  def calculate_new_position(self, direction, movement_distance, environment: "EevEnvironment"):
+    x, y = self.position
     match direction:
       case 'move_up':
         y -= movement_distance
@@ -112,15 +135,14 @@ class Cell:
         x -= movement_distance
       case 'move_right':
         x += movement_distance
-
     # Ensure the new position is within environment bounds
     x = max(0, min(x, environment.size - 1))
     y = max(0, min(y, environment.size - 1))
+    return x, y
 
-    # Update the cell's position
-    self.position = (x, y)
-
-    # Update the cell's position in the environment grid
+  def update_position(self, new_position, environment: "EevEnvironment"):
+    old_pos = self.position
+    self.position = new_position
     environment.update_grid(self, old_pos)
 
   def eat(self, environment: "EevEnvironment"):
@@ -129,25 +151,44 @@ class Cell:
     target_cell = environment.get_cell_at_position(front_position)
 
     if target_cell:
-      size_ratio = self.size / target_cell.size
+      energy_gained = self.calculate_energy_gained(
+        target_cell, eating_efficiency)
 
-      if size_ratio >= size_ratio_threshold:
-        # Full consumption logic
-        energy_transfer = min(target_cell.energy, base_energy_transfer *
-                              eating_efficiency * full_energy_conversion_rate)
+      if self.is_docked:
+        # Split the energy: some for this cell, the rest distributed among the organism
+        self_energy = energy_gained * 0.3  # 30% of the energy goes to this cell
+        shared_energy = energy_gained * 0.7  # 70% is shared with the organism
+
+        organism_cells = environment.get_organism_cells(environment.find(self))
+        shared_energy_per_cell = shared_energy / len(organism_cells)
+
+        for cell in organism_cells:
+          if cell != self:
+            cell.energy += shared_energy_per_cell
+        self.energy += self_energy
       else:
-        # Partial consumption logic
-        energy_transfer = min(target_cell.energy, base_energy_transfer *
-                              eating_efficiency * partial_energy_conversion_rate)
-        energy_loss_to_target = energy_transfer / partial_energy_loss_rate
-
-        target_cell.energy -= energy_loss_to_target
-
-      self.energy += energy_transfer
+        # Individual cell energy update
+        self.energy += energy_gained
 
       if target_cell.energy <= 0:
         target_cell.die()
         environment.remove_cell(target_cell)
+
+  def calculate_energy_gained(self, target_cell: "Cell", eating_efficiency):
+    size_ratio = self.size / target_cell.size
+
+    if size_ratio >= size_ratio_threshold:
+      # Full consumption logic
+      energy_transfer = min(target_cell.energy, base_energy_transfer *
+                            eating_efficiency * full_energy_conversion_rate)
+    else:
+      # Partial consumption logic
+      energy_transfer = min(target_cell.energy, base_energy_transfer *
+                            eating_efficiency * partial_energy_conversion_rate)
+      energy_loss_to_target = energy_transfer / partial_energy_loss_rate
+      target_cell.energy -= energy_loss_to_target
+
+    return energy_transfer
 
   def reproduce(self, environment: "EevEnvironment"):
     # Assuming this is the reproduction weight
@@ -163,15 +204,19 @@ class Cell:
       environment.cells.append(new_cell)
       self.energy -= energy_cost_of_reproduction
 
-  def dock(self, environment):
+  def dock(self, environment: "EevEnvironment"):
     # Assuming this is the docking weight
-    docking_success_rate = self.action_weights[3]
-    if random.random() < docking_success_rate:
-      # Successful docking logic
-      pass
-    else:
-      # Failed docking logic
-      pass
+    weight = self.action_weights[3]
+
+    # Quadratic scaling for docking probability
+    # Adjust the coefficients to fit the desired curve
+    docking_probability = min(0.12 * weight ** 2, 0.97)
+
+    if random.random() < docking_probability:
+      target_cell = environment.get_cell_at_position(self.get_front_position())
+      environment.union(self, target_cell)
+      self.is_docked = True
+      target_cell.is_docked = True
 
   def die(self):
     self.is_dead = True
@@ -187,6 +232,26 @@ class EevEnvironment:
     for cell in self.cells:
       self.place_in_grid(cell)
     self.heat = 0
+    # Initial disjoint sets
+    self.cell_sets = {cell: cell for cell in self.cells}
+
+  def find(self, cell):
+      # Find the root of the set that the cell belongs to
+    if self.cell_sets[cell] != cell:
+      self.cell_sets[cell] = self.find(
+        self.cell_sets[cell])  # Path compression
+    return self.cell_sets[cell]
+
+  def union(self, cell1, cell2):
+    # Merge the sets that cell1 and cell2 belong to
+    root1 = self.find(cell1)
+    root2 = self.find(cell2)
+    if root1 != root2:
+      self.cell_sets[root1] = root2  # Merge the sets
+
+  def get_organism_cells(self, organism_root):
+    # Return all cells that are part of the organism represented by organism_root
+    return [cell for cell in self.cells if self.find(cell) == organism_root]
 
   def place_in_grid(self, cell: Cell):
     x, y = cell.position

@@ -1,9 +1,4 @@
 {
-  "workbench.colorCustomizations": {
-    "activityBar.background": "#501F0C",
-    "titleBar.activeBackground": "#6F2B10",
-    "titleBar.activeForeground": "#FEFBFA"
-  },
   "[python]": {
     "editor.defaultFormatter": "ms-python.autopep8",
     "editor.formatOnSave": true,
@@ -12,5 +7,10 @@
   "editor.tabSize": 2,
   "autopep8.args": ["--indent-size=2", "--ignore=E121"],
   "editor.formatOnSave": true,
-  "editor.defaultFormatter": "esbenp.prettier-vscode"
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "workbench.colorCustomizations": {
+    "activityBar.background": "#501F0C",
+    "titleBar.activeBackground": "#6F2B10",
+    "titleBar.activeForeground": "#FEFBFA"
+  }
 }

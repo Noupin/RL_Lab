@@ -2,11 +2,23 @@ import numpy as np
 import random
 import tensorflow as tf
 import keras
+import os
 
 np.set_printoptions(suppress=True)
 
+
+def clear_screen():
+  # For Windows
+  if os.name == 'nt':
+    for _ in range(10):
+      print("\n")
+  # For macOS and Linux
+  else:
+    _ = os.system('clear')
+
+
 # Global parameters
-initial_energy = 10.0
+initial_energy = 1.0
 energy_cost_of_action = 0.1
 decay_to_heat_conversion = 0.5
 full_energy_conversion_rate = 0.8
@@ -18,6 +30,8 @@ mutation_rate = 0.005  # 0.5% chance of mutation
 raycast_distance = 1  # Distance for raycasting
 size_ratio_threshold = 0.75
 base_energy_transfer = 5.0
+environment_size = 10
+starting_cell_count = 2
 
 
 class Cell:
@@ -62,7 +76,7 @@ class Cell:
       [self.energy] + [is_within_ray] + list(self.action_weights))
     input_data = np.reshape(input_data, (1, -1))
 
-    action_probabilities = self.network.predict(input_data)[0]
+    action_probabilities = self.network.predict(input_data, verbose=0)[0]
     action = np.random.choice(['move_up', 'move_down', 'move_left',
                               'move_right', 'eat', 'reproduce', 'dock'], p=action_probabilities)
     return action
@@ -85,6 +99,7 @@ class Cell:
 
   def act(self, environment: "EevEnvironment"):
     action: str = self.decide_action(environment)
+    # print(action)
     match action:
       case action if action.startswith('move_'):
         self.move(action, environment)
@@ -94,6 +109,7 @@ class Cell:
         self.reproduce(environment)
       case 'dock':
         self.dock(environment)
+        # TODO: Add fix dock if two multi organisms are docked
 
   def move(self, direction, environment: "EevEnvironment"):
     movement_distance = int(self.action_weights[0])
@@ -201,7 +217,7 @@ class Cell:
       child_position = self.position  # Modify for different spawn location
       new_cell = Cell(action_weights=child_weights,
                       position=child_position)
-      environment.cells.append(new_cell)
+      environment.add_cell(new_cell)
       self.energy -= energy_cost_of_reproduction
 
   def dock(self, environment: "EevEnvironment"):
@@ -235,12 +251,14 @@ class EevEnvironment:
     # Initial disjoint sets
     self.cell_sets = {cell: cell for cell in self.cells}
 
-  def find(self, cell):
-      # Find the root of the set that the cell belongs to
-    if self.cell_sets[cell] != cell:
-      self.cell_sets[cell] = self.find(
-        self.cell_sets[cell])  # Path compression
-    return self.cell_sets[cell]
+  def find(self, cell: "Cell"):
+    if cell not in self.cell_sets:
+        # Handle the case where the cell is not in self.cell_sets
+        # For example, you could add the cell to self.cell_sets with itself as the parent
+      self.cell_sets[cell] = cell
+    while self.cell_sets[cell] != cell:
+      cell = self.cell_sets[cell]
+    return cell
 
   def union(self, cell1, cell2):
     # Merge the sets that cell1 and cell2 belong to
@@ -268,11 +286,16 @@ class EevEnvironment:
     return None  # No cell found at this position or position is out of bounds
 
   def update_grid(self, cell: Cell, old_position):
-    # Remove cell from old position
     old_x, old_y = old_position
-    self.grid[old_x][old_y].remove(cell)
-    # Add cell to new position
     new_x, new_y = cell.position
+
+    # Remove cell from old position
+    if cell in self.grid[old_x][old_y]:
+      self.grid[old_x][old_y].remove(cell)
+    else:
+      raise Exception("Cell not found in grid")
+
+    # Add cell to new position
     self.grid[new_x][new_y].append(cell)
 
   def check_ray(self, start_position, direction, max_distance=3):
@@ -316,8 +339,16 @@ class EevEnvironment:
     self.remove_dead_cells()
 
     if self.has_enough_energy():
-      self.cells.append(Cell(position=(random.randint(
+      self.add_cell(Cell(position=(random.randint(
           0, self.size - 1), random.randint(0, self.size - 1))))
+
+  def add_cell(self, cell: Cell):
+    # Add the cell to the cells list
+    self.cells.append(cell)
+    # Place the cell in the grid
+    self.place_in_grid(cell)
+    # Add the cell to the cell_sets for Union-Find structure
+    self.cell_sets[cell] = cell
 
   def apply_rules(self, cell: Cell):
     cell.size -= cell.decay_rate
@@ -344,9 +375,19 @@ class EevEnvironment:
 
 
 def run():
-  env = EevEnvironment(size=100, initial_cell_count=10)
+
+  env = EevEnvironment(size=environment_size,
+                       initial_cell_count=starting_cell_count)
   for _ in range(100):
-    print(len(env.cells))
+    clear_screen()
+    for row in env.grid:
+      row_display = ""
+      for cell in row:
+        if cell:  # If the list at this grid position is not empty
+          row_display += "O "
+        else:
+          row_display += ". "  # Using a dot as a placeholder for empty positions
+      print(row_display)
     env.step()
 
 

@@ -2,19 +2,13 @@ import numpy as np
 import random
 import tensorflow as tf
 import keras
-import os
 
 np.set_printoptions(suppress=True)
 
 
 def clear_screen():
-  # For Windows
-  if os.name == 'nt':
-    for _ in range(10):
-      print("\n")
-  # For macOS and Linux
-  else:
-    _ = os.system('clear')
+  for _ in range(10):
+    print("\n")
 
 
 # Global parameters
@@ -63,7 +57,7 @@ class Cell:
   def create_network(self):
     model = keras.Sequential([
         keras.layers.Dense(units=6, activation='relu',
-                           input_shape=(6,)),  # 10 inputs
+                           input_shape=(6,)),  # 6 inputs
         keras.layers.Dense(units=7, activation='softmax')  # 7 actions
     ])
     model.compile(optimizer='adam', loss='categorical_crossentropy')

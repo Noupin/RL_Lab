@@ -366,7 +366,7 @@ class EevEnvironment:
 
   def has_enough_energy(self):
     # Logic to determine if the environment can support a new cell
-    return random.choice([True, False])  # Example condition
+    return random.choice([True, False])  # Example condition TODO
 
   def render(self):
     for row in self.grid:

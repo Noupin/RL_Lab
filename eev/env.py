@@ -2,6 +2,7 @@ import numpy as np
 import random
 import tensorflow as tf
 import keras
+from colorama import Fore
 
 np.set_printoptions(suppress=True)
 
@@ -367,6 +368,24 @@ class EevEnvironment:
     # Logic to determine if the environment can support a new cell
     return random.choice([True, False])  # Example condition
 
+  def render(self):
+    for row in self.grid:
+      row_display = ""
+      for cell_list in row:
+        if len(cell_list) > 0:
+          if any(cell.is_docked for cell in cell_list):
+            # If any cell in this position is docked, display in blue
+            display_char = Fore.BLUE + 'O' + Fore.RESET
+          else:
+            display_char = 'O'
+          if len(cell_list) > 1:
+            # If more than one cell, show the count
+            display_char = str(len(cell_list))
+          row_display += display_char + " "
+        else:
+          row_display += ". "  # Empty space
+      print(row_display)
+
 
 def run():
 
@@ -374,14 +393,7 @@ def run():
                        initial_cell_count=starting_cell_count)
   for _ in range(100):
     clear_screen()
-    for row in env.grid:
-      row_display = ""
-      for cell in row:
-        if cell:  # If the list at this grid position is not empty
-          row_display += "O "
-        else:
-          row_display += ". "  # Using a dot as a placeholder for empty positions
-      print(row_display)
+    env.render()
     env.step()
 
 

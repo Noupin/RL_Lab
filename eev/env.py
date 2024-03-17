@@ -174,8 +174,8 @@ class Cell:
     front_position = self.get_front_position(environment)
     target_cell = environment.get_cell_at_position(front_position)
 
-    if target_cell:
-      print("Eating")
+    if target_cell and target_cell != self:
+      print("Eating", self.position, target_cell.position)
       energy_gained, lost_energy = self.calculate_energy_gained(
         target_cell, eating_efficiency)
 

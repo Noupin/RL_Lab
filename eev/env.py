@@ -3,6 +3,7 @@ import random
 import tensorflow as tf
 import keras
 from colorama import Fore
+import time
 
 np.set_printoptions(suppress=True)
 
@@ -26,7 +27,7 @@ raycast_distance = 1  # Distance for raycasting
 size_ratio_threshold = 0.75
 base_energy_transfer = 5.0
 environment_size = 10
-starting_cell_count = 2
+starting_cell_count = 3
 
 
 class Cell:
@@ -52,7 +53,7 @@ class Cell:
     self.is_dead = False
     self.max_size = 10
     self.position = position
-    self.direction = None  # Initialize direction
+    self.direction = "up"  # Initialize direction
     self.is_docked = False
 
   def create_network(self):
@@ -80,16 +81,19 @@ class Cell:
     # Cast a ray in the direction the cell is facing
     return environment.check_ray(self.position, self.direction, raycast_distance)
 
-  def get_front_position(self):
+  def get_front_position(self, environment: "EevEnvironment"):
     x, y = self.position
-    if self.direction == "up":
-      y -= 1
-    elif self.direction == "down":
-      y += 1
-    elif self.direction == "left":
-      x -= 1
-    elif self.direction == "right":
-      x += 1
+    match self.direction:
+      case "up":
+        y += 1
+      case "down":
+        y -= 1
+      case "left":
+        x -= 1
+      case "right":
+        x += 1
+    x = max(0, min(x, environment.size - 1))
+    y = max(0, min(y, environment.size - 1))
     return x, y
 
   def act(self, environment: "EevEnvironment"):
@@ -104,10 +108,19 @@ class Cell:
         self.reproduce(environment)
       case 'dock':
         self.dock(environment)
-        # TODO: Add fix dock if two multi organisms are docked
 
   def move(self, direction, environment: "EevEnvironment"):
     movement_distance = int(self.action_weights[0])
+
+    match direction:
+      case 'move_up':
+        self.direction = "up"
+      case 'move_down':
+        self.direction = "down"
+      case 'move_left':
+        self.direction = "left"
+      case 'move_right':
+        self.direction = "right"
 
     if self.is_docked:
       # If part of a multicellular organism, handle collective movement
@@ -158,7 +171,7 @@ class Cell:
 
   def eat(self, environment: "EevEnvironment"):
     eating_efficiency = self.action_weights[1]  # Eating weight
-    front_position = self.get_front_position()
+    front_position = self.get_front_position(environment)
     target_cell = environment.get_cell_at_position(front_position)
 
     if target_cell:
@@ -224,7 +237,10 @@ class Cell:
     docking_probability = min(0.12 * weight ** 2, 0.97)
 
     if random.random() < docking_probability:
-      target_cell = environment.get_cell_at_position(self.get_front_position())
+      target_cell = environment.get_cell_at_position(
+        self.get_front_position(environment))
+      if not target_cell or target_cell == self:
+        return  # No cell to dock with
       environment.union(self, target_cell)
       self.is_docked = True
       target_cell.is_docked = True
@@ -352,6 +368,17 @@ class EevEnvironment:
       cell.is_dead = True
 
   def remove_dead_cells(self):
+      # First, remove dead cells from the grid
+    for x in range(self.size):
+      for y in range(self.size):
+        self.grid[x][y] = [
+          cell for cell in self.grid[x][y] if not cell.is_dead]
+
+    # Then, remove dead cells from the Union-Find structure
+    self.cell_sets = {cell: parent for cell,
+                      parent in self.cell_sets.items() if not cell.is_dead}
+
+    # Finally, remove dead cells from the main cells list
     self.cells = [cell for cell in self.cells if not cell.is_dead]
 
   def remove_cell(self, cell: Cell):
@@ -365,8 +392,10 @@ class EevEnvironment:
       self.cells.remove(cell)
 
   def has_enough_energy(self):
-    # Logic to determine if the environment can support a new cell
-    return random.choice([True, False])  # Example condition TODO
+    if self.heat >= initial_energy:
+      self.heat -= initial_energy
+      return True
+    return False
 
   def render(self):
     for row in self.grid:
@@ -393,8 +422,11 @@ def run():
                        initial_cell_count=starting_cell_count)
   for _ in range(100):
     clear_screen()
+    print("Total Energy: ", env.heat +
+          sum([cell.energy for cell in env.cells]))
     env.render()
     env.step()
+    time.sleep(0.5)
 
 
 if __name__ == "__main__":

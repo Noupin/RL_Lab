@@ -9,19 +9,18 @@ np.set_printoptions(suppress=True)
 
 
 def clear_screen():
-  for _ in range(10):
+  for _ in range(5):
     print("\n")
 
 
 # Global parameters
 initial_energy = 1.0
 energy_cost_of_action = 0.1
-decay_to_heat_conversion = 0.5
+cost_of_moving = 0.2
+cost_of_docking = 0.3
 full_energy_conversion_rate = 0.8
 energy_cost_of_reproduction = 2.0  # Energy cost for reproduction
 partial_energy_conversion_rate = 0.5
-partial_energy_loss_rate = 0.6
-energy_cost_of_eating = 0.2
 mutation_rate = 0.005  # 0.5% chance of mutation
 raycast_distance = 1  # Distance for raycasting
 size_ratio_threshold = 0.75
@@ -48,10 +47,7 @@ class Cell:
 
     self.energy = initial_energy
     self.network = self.create_network()
-    self.size = random.uniform(0.5, 1.0)
-    self.decay_rate = 0.1
     self.is_dead = False
-    self.max_size = 10
     self.position = position
     self.direction = "up"  # Initialize direction
     self.is_docked = False
@@ -98,7 +94,9 @@ class Cell:
 
   def act(self, environment: "EevEnvironment"):
     action: str = self.decide_action(environment)
-    # print(action)
+    self.energy -= energy_cost_of_action
+    environment.heat += energy_cost_of_action
+
     match action:
       case action if action.startswith('move_'):
         self.move(action, environment)
@@ -122,6 +120,8 @@ class Cell:
       case 'move_right':
         self.direction = "right"
 
+    self.energy -= cost_of_moving
+    environment.heat += cost_of_moving
     if self.is_docked:
       # If part of a multicellular organism, handle collective movement
       self.handle_multicell_movement(direction, movement_distance, environment)
@@ -175,7 +175,8 @@ class Cell:
     target_cell = environment.get_cell_at_position(front_position)
 
     if target_cell:
-      energy_gained = self.calculate_energy_gained(
+      print("Eating")
+      energy_gained, lost_energy = self.calculate_energy_gained(
         target_cell, eating_efficiency)
 
       if self.is_docked:
@@ -198,35 +199,45 @@ class Cell:
         target_cell.die()
         environment.remove_cell(target_cell)
 
+      environment.heat += lost_energy
+
   def calculate_energy_gained(self, target_cell: "Cell", eating_efficiency):
-    size_ratio = self.size / target_cell.size
+    size_ratio = self.energy / target_cell.energy
+    lost_energy = 0
 
     if size_ratio >= size_ratio_threshold:
-      # Full consumption logic
-      energy_transfer = min(target_cell.energy, base_energy_transfer *
-                            eating_efficiency * full_energy_conversion_rate)
+        # Full consumption logic
+      energy_transfer = target_cell.energy * \
+        full_energy_conversion_rate * (eating_efficiency / 4)
+      target_cell.energy = 0  # Reduce the target cell's energy
+      lost_energy = target_cell.energy - energy_transfer
     else:
       # Partial consumption logic
-      energy_transfer = min(target_cell.energy, base_energy_transfer *
-                            eating_efficiency * partial_energy_conversion_rate)
-      energy_loss_to_target = energy_transfer / partial_energy_loss_rate
-      target_cell.energy -= energy_loss_to_target
+      energy_transfer = target_cell.energy * \
+        (eating_efficiency / 4) * partial_energy_conversion_rate
+      target_cell.energy -= energy_transfer  # Reduce the target cell's energy
 
-    return energy_transfer
+    return energy_transfer, lost_energy
 
   def reproduce(self, environment: "EevEnvironment"):
     # Assuming this is the reproduction weight
-    reproduction_offset_from_weight = self.action_weights[2]
-    if self.energy > (energy_cost_of_reproduction - reproduction_offset_from_weight):
+    reproduction_efficiency = self.action_weights[2]
+    # Calculate the actual energy cost of reproduction based on efficiency
+    # The more efficient at reproducing, the closer the cost is to initial_energy
+    actual_energy_cost = min(
+      initial_energy + (4 - reproduction_efficiency), initial_energy)
+
+    if self.energy > actual_energy_cost:
+      print("Reproducing")
       child_weights = self.action_weights.copy()
       if random.random() < mutation_rate:
         child_weights += np.random.uniform(-0.05, 0.05, 4)
         child_weights /= child_weights.sum() * 4
       child_position = self.position  # Modify for different spawn location
-      new_cell = Cell(action_weights=child_weights,
-                      position=child_position)
+      new_cell = Cell(action_weights=child_weights, position=child_position)
       environment.add_cell(new_cell)
-      self.energy -= energy_cost_of_reproduction
+      self.energy -= actual_energy_cost
+      environment.heat += actual_energy_cost - initial_energy
 
   def dock(self, environment: "EevEnvironment"):
     # Assuming this is the docking weight
@@ -241,6 +252,9 @@ class Cell:
         self.get_front_position(environment))
       if not target_cell or target_cell == self:
         return  # No cell to dock with
+      print("Docking")
+      self.energy -= cost_of_docking
+      environment.heat += cost_of_docking
       environment.union(self, target_cell)
       self.is_docked = True
       target_cell.is_docked = True
@@ -352,6 +366,7 @@ class EevEnvironment:
     if self.has_enough_energy():
       self.add_cell(Cell(position=(random.randint(
           0, self.size - 1), random.randint(0, self.size - 1))))
+      self.heat -= initial_energy
 
   def add_cell(self, cell: Cell):
     # Add the cell to the cells list
@@ -362,9 +377,7 @@ class EevEnvironment:
     self.cell_sets[cell] = cell
 
   def apply_rules(self, cell: Cell):
-    cell.size -= cell.decay_rate
-    self.heat += cell.decay_rate
-    if cell.size <= 0:
+    if cell.energy <= 0:
       cell.is_dead = True
 
   def remove_dead_cells(self):
@@ -379,6 +392,7 @@ class EevEnvironment:
                       parent in self.cell_sets.items() if not cell.is_dead}
 
     # Finally, remove dead cells from the main cells list
+    self.heat += sum([cell.energy for cell in self.cells if cell.is_dead])
     self.cells = [cell for cell in self.cells if not cell.is_dead]
 
   def remove_cell(self, cell: Cell):
@@ -393,7 +407,6 @@ class EevEnvironment:
 
   def has_enough_energy(self):
     if self.heat >= initial_energy:
-      self.heat -= initial_energy
       return True
     return False
 

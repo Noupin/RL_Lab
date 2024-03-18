@@ -93,6 +93,9 @@ class Cell:
     return x, y
 
   def act(self, environment: "EevEnvironment"):
+    if self.is_dead:
+      return
+
     action: str = self.decide_action(environment)
     self.energy -= energy_cost_of_action
     environment.heat += energy_cost_of_action
@@ -174,7 +177,7 @@ class Cell:
     front_position = self.get_front_position(environment)
     target_cell = environment.get_cell_at_position(front_position)
 
-    if target_cell and target_cell != self:
+    if target_cell and target_cell != self and not target_cell.is_dead:
       print("Eating", self.position, target_cell.position)
       energy_gained, lost_energy = self.calculate_energy_gained(
         target_cell, eating_efficiency)
@@ -194,10 +197,11 @@ class Cell:
       else:
         # Individual cell energy update
         self.energy += energy_gained
+      print(self.energy, target_cell.energy)
 
       if target_cell.energy <= 0:
         target_cell.die()
-        environment.remove_cell(target_cell)
+        environment.heat += target_cell.energy  # TODO IDK about this
 
       environment.heat += lost_energy
 
@@ -205,6 +209,7 @@ class Cell:
     size_ratio = self.energy / target_cell.energy
     lost_energy = 0
 
+    print(self.energy, target_cell.energy)
     if size_ratio >= size_ratio_threshold:
         # Full consumption logic
       energy_transfer = target_cell.energy * \
@@ -214,7 +219,7 @@ class Cell:
     else:
       # Partial consumption logic
       energy_transfer = target_cell.energy * \
-        (eating_efficiency / 4) * partial_energy_conversion_rate
+          (eating_efficiency / 4) * partial_energy_conversion_rate
       target_cell.energy -= energy_transfer  # Reduce the target cell's energy
 
     return energy_transfer, lost_energy
@@ -250,7 +255,7 @@ class Cell:
     if random.random() < docking_probability:
       target_cell = environment.get_cell_at_position(
         self.get_front_position(environment))
-      if not target_cell or target_cell == self:
+      if not target_cell or target_cell == self or target_cell.is_dead:
         return  # No cell to dock with
       print("Docking")
       self.energy -= cost_of_docking
@@ -381,29 +386,30 @@ class EevEnvironment:
       cell.is_dead = True
 
   def remove_dead_cells(self):
-      # First, remove dead cells from the grid
+    dead_cells = [cell for cell in self.cells if cell.is_dead]
+
+    for dead_cell in dead_cells:
+        # Find all cells in the same organism
+      organism_cells = self.get_organism_cells(dead_cell)
+
+      # Update docking status for living cells in the organism
+      for cell in organism_cells:
+        if cell != dead_cell and len(organism_cells) <= 2:
+          cell.is_docked = False
+        # Additional logic for larger organisms
+
+      # Remove the dead cell from the Union-Find structure
+      del self.cell_sets[dead_cell]
+
+    # First, remove dead cells from the grid
     for x in range(self.size):
       for y in range(self.size):
         self.grid[x][y] = [
           cell for cell in self.grid[x][y] if not cell.is_dead]
 
-    # Then, remove dead cells from the Union-Find structure
-    self.cell_sets = {cell: parent for cell,
-                      parent in self.cell_sets.items() if not cell.is_dead}
-
     # Finally, remove dead cells from the main cells list
     self.heat += sum([cell.energy for cell in self.cells if cell.is_dead])
     self.cells = [cell for cell in self.cells if not cell.is_dead]
-
-  def remove_cell(self, cell: Cell):
-    # Remove the cell from the grid
-    x, y = cell.position
-    if cell in self.grid[x][y]:
-      self.grid[x][y].remove(cell)
-
-    # Remove the cell from the list of cells
-    if cell in self.cells:
-      self.cells.remove(cell)
 
   def has_enough_energy(self):
     if self.heat >= initial_energy:
@@ -433,13 +439,13 @@ def run():
 
   env = EevEnvironment(size=environment_size,
                        initial_cell_count=starting_cell_count)
-  for _ in range(100):
+  for _ in range(1000):
     clear_screen()
     print("Total Energy: ", env.heat +
-          sum([cell.energy for cell in env.cells]))
+          sum([cell.energy for cell in env.cells]), "Step: ", _ + 1)
     env.render()
     env.step()
-    time.sleep(0.5)
+    # time.sleep(0.5)
 
 
 if __name__ == "__main__":

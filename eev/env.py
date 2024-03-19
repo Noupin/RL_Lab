@@ -197,11 +197,10 @@ class Cell:
       else:
         # Individual cell energy update
         self.energy += energy_gained
-      print(self.energy, target_cell.energy)
 
       if target_cell.energy <= 0:
         target_cell.die()
-        environment.heat += target_cell.energy  # TODO IDK about this
+        # environment.heat += target_cell.energy  # TODO IDK about this
 
       environment.heat += lost_energy
 
@@ -209,13 +208,13 @@ class Cell:
     size_ratio = self.energy / target_cell.energy
     lost_energy = 0
 
-    print(self.energy, target_cell.energy)
     if size_ratio >= size_ratio_threshold:
-        # Full consumption logic
+      # Full consumption logic
       energy_transfer = target_cell.energy * \
-        full_energy_conversion_rate * (eating_efficiency / 4)
-      target_cell.energy = 0  # Reduce the target cell's energy
+          full_energy_conversion_rate * (eating_efficiency / 4)
+
       lost_energy = target_cell.energy - energy_transfer
+      target_cell.energy = 0  # Reduce the target cell's energy
     else:
       # Partial consumption logic
       energy_transfer = target_cell.energy * \

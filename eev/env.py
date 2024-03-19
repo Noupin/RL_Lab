@@ -13,6 +13,16 @@ def clear_screen():
     print("\n")
 
 
+def create_network():
+  model = keras.Sequential([
+      keras.layers.Dense(units=6, activation='relu',
+                         input_shape=(6,)),  # 6 inputs
+      keras.layers.Dense(units=7, activation='softmax')  # 7 actions
+  ])
+  model.compile(optimizer='adam', loss='categorical_crossentropy')
+  return model
+
+
 # Global parameters
 initial_energy = 1.0
 energy_cost_of_action = 0.1
@@ -30,7 +40,7 @@ starting_cell_count = 3
 
 
 class Cell:
-  def __init__(self, action_weights=None, position=(0, 0)):
+  def __init__(self, action_weights=None, position=(0, 0), network=None):
     # For new cells or cells that just so happen to mutate
     if action_weights is None or np.random.rand() < mutation_rate:
       # Randomly initialize action weights for a new cell
@@ -46,7 +56,7 @@ class Cell:
       self.action_weights *= (4 / self.action_weights.sum())
 
     self.energy = initial_energy
-    self.network = self.create_network()
+    self.network = network if network else self.create_network()
     self.is_dead = False
     self.position = position
     self.direction = "up"  # Initialize direction
@@ -210,12 +220,14 @@ class Cell:
 
     if size_ratio >= size_ratio_threshold:
       # Full consumption logic
+      print("Full consumption")
       energy_transfer = target_cell.energy * \
           full_energy_conversion_rate * (eating_efficiency / 4)
 
       lost_energy = target_cell.energy - energy_transfer
       target_cell.energy = 0  # Reduce the target cell's energy
     else:
+      print("Partial consumption")
       # Partial consumption logic
       energy_transfer = target_cell.energy * \
           (eating_efficiency / 4) * partial_energy_conversion_rate
@@ -238,7 +250,8 @@ class Cell:
         child_weights += np.random.uniform(-0.05, 0.05, 4)
         child_weights /= child_weights.sum() * 4
       child_position = self.position  # Modify for different spawn location
-      new_cell = Cell(action_weights=child_weights, position=child_position)
+      new_cell = Cell(action_weights=child_weights,
+                      position=child_position, network=self.network)
       environment.add_cell(new_cell)
       self.energy -= actual_energy_cost
       environment.heat += actual_energy_cost - initial_energy
@@ -268,12 +281,13 @@ class Cell:
 
 
 class EevEnvironment:
-  def __init__(self, size, initial_cell_count):
+  def __init__(self, size, initial_cell_count, network=None):
     self.size = size
+    self.network = network
     self.grid = [[[] for _ in range(size)]
                  for _ in range(size)]  # Initialize grid
     self.cells = [Cell(position=(random.randint(
-        0, size - 1), random.randint(0, size - 1))) for _ in range(initial_cell_count)]
+        0, size - 1), random.randint(0, size - 1)), network=network) for _ in range(initial_cell_count)]
     for cell in self.cells:
       self.place_in_grid(cell)
     self.heat = 0
@@ -369,7 +383,7 @@ class EevEnvironment:
 
     if self.has_enough_energy():
       self.add_cell(Cell(position=(random.randint(
-          0, self.size - 1), random.randint(0, self.size - 1))))
+          0, self.size - 1), random.randint(0, self.size - 1)), network=self.network))
       self.heat -= initial_energy
 
   def add_cell(self, cell: Cell):
@@ -399,6 +413,9 @@ class EevEnvironment:
 
       # Remove the dead cell from the Union-Find structure
       del self.cell_sets[dead_cell]
+      # x, y = dead_cell.position
+      # self.grid[x][y] = [
+      #     cell for cell in self.grid[x][y] if not cell.is_dead]
 
     # First, remove dead cells from the grid
     for x in range(self.size):
@@ -435,10 +452,10 @@ class EevEnvironment:
 
 
 def run():
-
+  network = create_network()
   env = EevEnvironment(size=environment_size,
-                       initial_cell_count=starting_cell_count)
-  for _ in range(1000):
+                       initial_cell_count=starting_cell_count, network=network)
+  for _ in range(10000):
     clear_screen()
     print("Total Energy: ", env.heat +
           sum([cell.energy for cell in env.cells]), "Step: ", _ + 1)

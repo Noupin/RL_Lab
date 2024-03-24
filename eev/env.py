@@ -4,6 +4,8 @@ import tensorflow as tf
 import keras
 from colorama import Fore
 import time
+import sys
+import traceback
 
 np.set_printoptions(suppress=True)
 
@@ -35,8 +37,8 @@ mutation_rate = 0.005  # 0.5% chance of mutation
 raycast_distance = 1  # Distance for raycasting
 size_ratio_threshold = 0.75
 base_energy_transfer = 5.0
-environment_size = 10
-starting_cell_count = 3
+environment_size = 7
+starting_cell_count = 5
 
 
 class Cell:
@@ -381,7 +383,7 @@ class EevEnvironment:
 
     self.remove_dead_cells()
 
-    if self.has_enough_energy():
+    while self.has_enough_energy():
       self.add_cell(Cell(position=(random.randint(
           0, self.size - 1), random.randint(0, self.size - 1)), network=self.network))
       self.heat -= initial_energy
@@ -400,22 +402,15 @@ class EevEnvironment:
 
   def remove_dead_cells(self):
     dead_cells = [cell for cell in self.cells if cell.is_dead]
+    living_cells = set(self.cells) - set(dead_cells)
+    self.cell_sets = {cell: parent for cell, parent in self.cell_sets.items(
+    ) if cell in living_cells and parent in living_cells}
 
-    for dead_cell in dead_cells:
-        # Find all cells in the same organism
-      organism_cells = self.get_organism_cells(dead_cell)
-
-      # Update docking status for living cells in the organism
-      for cell in organism_cells:
-        if cell != dead_cell and len(organism_cells) <= 2:
-          cell.is_docked = False
-        # Additional logic for larger organisms
-
-      # Remove the dead cell from the Union-Find structure
-      del self.cell_sets[dead_cell]
-      # x, y = dead_cell.position
-      # self.grid[x][y] = [
-      #     cell for cell in self.grid[x][y] if not cell.is_dead]
+    # print(self.cells)
+    # print(dead_cells)
+    # print(living_cells)
+    # print(self.cell_sets)
+    # print(self.grid)
 
     # First, remove dead cells from the grid
     for x in range(self.size):
@@ -455,10 +450,10 @@ def run():
   network = create_network()
   env = EevEnvironment(size=environment_size,
                        initial_cell_count=starting_cell_count, network=network)
-  for _ in range(10000):
+  for _ in range(100000):
     clear_screen()
     print("Total Energy: ", env.heat +
-          sum([cell.energy for cell in env.cells]), "Step: ", _ + 1)
+          sum([cell.energy for cell in env.cells]), "\nStep: ", _ + 1, "\nCells: ", len(env.cells))
     env.render()
     env.step()
     # time.sleep(0.5)

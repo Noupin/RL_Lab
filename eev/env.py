@@ -1,3 +1,4 @@
+from typing import Tuple, Union
 import numpy as np
 import random
 import tensorflow as tf
@@ -25,6 +26,13 @@ def create_network():
   return model
 
 
+checkpoint_path = "cell.ckpt"
+checkpoint_callback = keras.callbacks.ModelCheckpoint(
+    filepath=checkpoint_path,
+    save_weights_only=True,
+    verbose=1,
+    save_freq='epoch')
+
 # Global parameters
 initial_energy = 1.0
 energy_cost_of_action = 0.1
@@ -39,6 +47,17 @@ size_ratio_threshold = 0.75
 base_energy_transfer = 5.0
 environment_size = 7
 starting_cell_count = 5
+
+# Reward values
+REWARD_MOVE = 0.1
+REWARD_PARTIAL_EAT = 1
+REWARD_FULL_EAT = 2
+REWARD_REPRODUCE = 3
+REWARD_DOCK = 2
+PENALTY_STAY = -0.1  # Penalty for attempting to move but staying in the same spot
+PENALTY_FAIL_DOCK = -0.5  # Penalty for failed docking
+PENALTY_FAIL_EAT = -0.5  # Penalty for failed eating
+PENALTY_FAIL_REPRODUCE = -0.5  # Penalty for failed reproduction
 
 
 class Cell:
@@ -58,32 +77,33 @@ class Cell:
       self.action_weights *= (4 / self.action_weights.sum())
 
     self.energy = initial_energy
-    self.network = network if network else self.create_network()
+    self.network = network if network else create_network()
     self.is_dead = False
     self.position = position
     self.direction = "up"  # Initialize direction
     self.is_docked = False
+    self.reward = 0
+    self.action_array = ['move_up', 'move_down',
+                         'move_left', 'move_right', 'eat', 'reproduce', 'dock']
 
-  def create_network(self):
-    model = keras.Sequential([
-        keras.layers.Dense(units=6, activation='relu',
-                           input_shape=(6,)),  # 6 inputs
-        keras.layers.Dense(units=7, activation='softmax')  # 7 actions
-    ])
-    model.compile(optimizer='adam', loss='categorical_crossentropy')
-    return model
-
-  def decide_action(self, environment: "EevEnvironment") -> str:
-    # Get raycast information
+  def get_current_state(self, environment: "EevEnvironment"):
     is_within_ray = self.cast_ray(environment)
-    input_data = np.array(
-      [self.energy] + [is_within_ray] + list(self.action_weights))
-    input_data = np.reshape(input_data, (1, -1))
+    return np.array([self.energy] + [is_within_ray] + list(self.action_weights))
+
+  def decide_action(self, environment: "EevEnvironment"):
+    input_data = np.reshape(self.get_current_state(environment), (1, -1))
 
     action_probabilities = self.network.predict(input_data, verbose=0)[0]
-    action = np.random.choice(['move_up', 'move_down', 'move_left',
-                              'move_right', 'eat', 'reproduce', 'dock'], p=action_probabilities)
-    return action
+    action = np.random.choice(
+      range(0, len(self.action_array)), p=action_probabilities)
+    return self.action_array[action], action, action_probabilities
+
+  def train_model(self, environment: "EevEnvironment", action_index, action_probabilities):
+    target_q_values = action_probabilities.copy()
+    target_q_values[action_index] = self.reward
+    current_state = np.reshape(self.get_current_state(environment), (1, -1))
+    self.network.fit(current_state,
+                     np.array([target_q_values]), epochs=1, verbose=0)
 
   def cast_ray(self, environment: "EevEnvironment"):
     # Cast a ray in the direction the cell is facing
@@ -104,11 +124,14 @@ class Cell:
     y = max(0, min(y, environment.size - 1))
     return x, y
 
-  def act(self, environment: "EevEnvironment"):
+  def act(self, environment: "EevEnvironment", train=False):
     if self.is_dead:
       return
 
-    action: str = self.decide_action(environment)
+    self.reward = 0
+    # Remove type annotation from assignment statement
+    action, action_index, action_probabilities = self.decide_action(
+      environment)
     self.energy -= energy_cost_of_action
     environment.heat += energy_cost_of_action
 
@@ -121,6 +144,9 @@ class Cell:
         self.reproduce(environment)
       case 'dock':
         self.dock(environment)
+
+    if train:
+      self.train_model(environment, action_index, action_probabilities)
 
   def move(self, direction, environment: "EevEnvironment"):
     movement_distance = int(self.action_weights[0])
@@ -137,6 +163,7 @@ class Cell:
 
     self.energy -= cost_of_moving
     environment.heat += cost_of_moving
+    old_pos = self.position
     if self.is_docked:
       # If part of a multicellular organism, handle collective movement
       self.handle_multicell_movement(direction, movement_distance, environment)
@@ -144,6 +171,11 @@ class Cell:
       # Individual cell movement
       self.execute_individual_movement(
         direction, movement_distance, environment)
+
+    if old_pos == self.position:
+      self.reward += PENALTY_STAY
+    else:
+      self.reward += REWARD_MOVE
 
   def execute_individual_movement(self, direction, movement_distance, environment: "EevEnvironment"):
     # Calculate new position based on direction and movement distance
@@ -215,6 +247,9 @@ class Cell:
         # environment.heat += target_cell.energy  # TODO IDK about this
 
       environment.heat += lost_energy
+      self.reward += REWARD_FULL_EAT
+    else:
+      self.reward += PENALTY_FAIL_EAT
 
   def calculate_energy_gained(self, target_cell: "Cell", eating_efficiency):
     size_ratio = self.energy / target_cell.energy
@@ -257,6 +292,9 @@ class Cell:
       environment.add_cell(new_cell)
       self.energy -= actual_energy_cost
       environment.heat += actual_energy_cost - initial_energy
+      self.reward += REWARD_REPRODUCE
+    else:
+      self.reward += PENALTY_FAIL_REPRODUCE
 
   def dock(self, environment: "EevEnvironment"):
     # Assuming this is the docking weight
@@ -277,6 +315,7 @@ class Cell:
       environment.union(self, target_cell)
       self.is_docked = True
       target_cell.is_docked = True
+      self.reward += REWARD_DOCK
 
   def die(self):
     self.is_dead = True
@@ -376,9 +415,9 @@ class EevEnvironment:
       # Position is out of bounds
       return False
 
-  def step(self):
+  def step(self, train=False):
     for cell in self.cells:
-      cell.act(self)
+      cell.act(self, train)
       self.apply_rules(cell)
 
     self.remove_dead_cells()
@@ -403,14 +442,17 @@ class EevEnvironment:
   def remove_dead_cells(self):
     dead_cells = [cell for cell in self.cells if cell.is_dead]
     living_cells = set(self.cells) - set(dead_cells)
+
+    for dead_cell in dead_cells:
+        # Find all cells in the same organism
+      organism_cells = self.get_organism_cells(dead_cell)
+      # Update docking status for living cells in the organism
+      for cell in organism_cells:
+        if cell != dead_cell and len(organism_cells) <= 2:
+          cell.is_docked = False
+
     self.cell_sets = {cell: parent for cell, parent in self.cell_sets.items(
     ) if cell in living_cells and parent in living_cells}
-
-    # print(self.cells)
-    # print(dead_cells)
-    # print(living_cells)
-    # print(self.cell_sets)
-    # print(self.grid)
 
     # First, remove dead cells from the grid
     for x in range(self.size):
@@ -455,7 +497,7 @@ def run():
     print("Total Energy: ", env.heat +
           sum([cell.energy for cell in env.cells]), "\nStep: ", _ + 1, "\nCells: ", len(env.cells))
     env.render()
-    env.step()
+    env.step(train=True)
     # time.sleep(0.5)
 
 

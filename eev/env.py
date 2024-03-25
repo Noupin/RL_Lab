@@ -1,12 +1,9 @@
-from typing import Tuple, Union
 import numpy as np
 import random
 import tensorflow as tf
 import keras
 from colorama import Fore
-import time
-import sys
-import traceback
+import os
 
 np.set_printoptions(suppress=True)
 
@@ -505,7 +502,8 @@ class EevEnvironment:
 
 def run():
   network = create_network()
-  network.load_weights(checkpoint_path)
+  if f"{checkpoint_path}.index" in os.listdir("."):
+    network.load_weights(checkpoint_path)
   env = EevEnvironment(size=environment_size,
                        initial_cell_count=starting_cell_count, network=network)
   for _ in range(100000):

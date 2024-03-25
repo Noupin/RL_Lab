@@ -85,6 +85,8 @@ class Cell:
     self.reward = 0
     self.action_array = ['move_up', 'move_down',
                          'move_left', 'move_right', 'eat', 'reproduce', 'dock']
+    self.train_x = None
+    self.train_y = None
 
   def get_current_state(self, environment: "EevEnvironment"):
     is_within_ray = self.cast_ray(environment)
@@ -102,8 +104,10 @@ class Cell:
     target_q_values = action_probabilities.copy()
     target_q_values[action_index] = self.reward
     current_state = np.reshape(self.get_current_state(environment), (1, -1))
-    self.network.fit(current_state,
-                     np.array([target_q_values]), epochs=1, verbose=0)
+    self.train_x = current_state
+    self.train_y = np.array([target_q_values])
+    # self.network.fit(current_state,
+    #                  np.array([target_q_values]), epochs=1, verbose=0, callbacks=[checkpoint_callback])
 
   def cast_ray(self, environment: "EevEnvironment"):
     # Cast a ray in the direction the cell is facing
@@ -324,7 +328,7 @@ class Cell:
 class EevEnvironment:
   def __init__(self, size, initial_cell_count, network=None):
     self.size = size
-    self.network = network
+    self.network = network if network else create_network()
     self.grid = [[[] for _ in range(size)]
                  for _ in range(size)]  # Initialize grid
     self.cells = [Cell(position=(random.randint(
@@ -337,8 +341,8 @@ class EevEnvironment:
 
   def find(self, cell: "Cell"):
     if cell not in self.cell_sets:
-        # Handle the case where the cell is not in self.cell_sets
-        # For example, you could add the cell to self.cell_sets with itself as the parent
+      # Handle the case where the cell is not in self.cell_sets
+      # For example, you could add the cell to self.cell_sets with itself as the parent
       self.cell_sets[cell] = cell
     while self.cell_sets[cell] != cell:
       cell = self.cell_sets[cell]
@@ -416,9 +420,20 @@ class EevEnvironment:
       return False
 
   def step(self, train=False):
+    aggregated_train_x = []
+    aggregated_train_y = []
+
     for cell in self.cells:
       cell.act(self, train)
+      if cell.is_dead and (cell.train_x is None or cell.train_y is None):
+        continue
+      aggregated_train_x.append(cell.train_x)
+      aggregated_train_y.append(cell.train_y)
       self.apply_rules(cell)
+
+    if train:
+      self.network.fit(np.array(aggregated_train_x).squeeze(),
+                       np.array(aggregated_train_y).squeeze(), epochs=1, verbose=0, callbacks=[checkpoint_callback])
 
     self.remove_dead_cells()
 
@@ -490,6 +505,7 @@ class EevEnvironment:
 
 def run():
   network = create_network()
+  network.load_weights(checkpoint_path)
   env = EevEnvironment(size=environment_size,
                        initial_cell_count=starting_cell_count, network=network)
   for _ in range(100000):

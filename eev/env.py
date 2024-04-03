@@ -55,6 +55,7 @@ PENALTY_STAY = -0.1  # Penalty for attempting to move but staying in the same sp
 PENALTY_FAIL_DOCK = -0.5  # Penalty for failed docking
 PENALTY_FAIL_EAT = -0.5  # Penalty for failed eating
 PENALTY_FAIL_REPRODUCE = -0.5  # Penalty for failed reproduction
+PENALTY_DIE = -1  # Penalty for dying
 
 
 class Cell:
@@ -97,14 +98,17 @@ class Cell:
       range(0, len(self.action_array)), p=action_probabilities)
     return self.action_array[action], action, action_probabilities
 
-  def train_model(self, environment: "EevEnvironment", action_index, action_probabilities):
+  def train_model(self, environment: "EevEnvironment", action_index, action_probabilities, batch_train=True):
     target_q_values = action_probabilities.copy()
     target_q_values[action_index] = self.reward
     current_state = np.reshape(self.get_current_state(environment), (1, -1))
     self.train_x = current_state
     self.train_y = np.array([target_q_values])
-    # self.network.fit(current_state,
-    #                  np.array([target_q_values]), epochs=1, verbose=0, callbacks=[checkpoint_callback])
+
+    if not batch_train:
+      print("Not batch training")
+      self.network.fit(current_state,
+                       np.array([target_q_values]), epochs=1, verbose=0, callbacks=[checkpoint_callback])
 
   def cast_ray(self, environment: "EevEnvironment"):
     # Cast a ray in the direction the cell is facing
@@ -125,7 +129,7 @@ class Cell:
     y = max(0, min(y, environment.size - 1))
     return x, y
 
-  def act(self, environment: "EevEnvironment", train=False):
+  def act(self, environment: "EevEnvironment", train=False, batch_train=True):
     if self.is_dead:
       return
 
@@ -146,8 +150,12 @@ class Cell:
       case 'dock':
         self.dock(environment)
 
+    if self.energy <= 0:
+      self.reward += PENALTY_DIE
+
     if train:
-      self.train_model(environment, action_index, action_probabilities)
+      self.train_model(environment, action_index,
+                       action_probabilities, batch_train)
 
   def move(self, direction, environment: "EevEnvironment"):
     movement_distance = int(self.action_weights[0])
@@ -323,8 +331,9 @@ class Cell:
 
 
 class EevEnvironment:
-  def __init__(self, size, initial_cell_count, network=None):
+  def __init__(self, size, initial_cell_count, network=None, batch_train=True):
     self.size = size
+    self.batch_train = batch_train
     self.network = network if network else create_network()
     self.grid = [[[] for _ in range(size)]
                  for _ in range(size)]  # Initialize grid
@@ -335,6 +344,9 @@ class EevEnvironment:
     self.heat = 0
     # Initial disjoint sets
     self.cell_sets = {cell: cell for cell in self.cells}
+
+    self.aggregated_train_x = []
+    self.aggregated_train_y = []
 
   def find(self, cell: "Cell"):
     if cell not in self.cell_sets:
@@ -417,20 +429,21 @@ class EevEnvironment:
       return False
 
   def step(self, train=False):
-    aggregated_train_x = []
-    aggregated_train_y = []
-
     for cell in self.cells:
-      cell.act(self, train)
-      if cell.is_dead and (cell.train_x is None or cell.train_y is None):
+      cell.act(self, train, self.batch_train)
+      # This happens when a cell is dead before it acts and cant make a move
+      if cell.train_x is None or cell.train_y is None:
         continue
-      aggregated_train_x.append(cell.train_x)
-      aggregated_train_y.append(cell.train_y)
+      self.aggregated_train_x.append(cell.train_x)
+      self.aggregated_train_y.append(cell.train_y)
       self.apply_rules(cell)
 
-    if train:
-      self.network.fit(np.array(aggregated_train_x).squeeze(),
-                       np.array(aggregated_train_y).squeeze(), epochs=1, verbose=0, callbacks=[checkpoint_callback])
+    if train & self.batch_train:
+      print("Batch training")
+      self.network.fit(np.array(self.aggregated_train_x).squeeze(),
+                       np.array(self.aggregated_train_y).squeeze(), epochs=1, verbose=0, callbacks=[checkpoint_callback])
+      self.aggregated_train_x = []
+      self.aggregated_train_y = []
 
     self.remove_dead_cells()
 
@@ -501,18 +514,20 @@ class EevEnvironment:
 
 
 def run():
+  batch_train = True
+  train_interval = 5
+
   network = create_network()
   if f"{checkpoint_path}.index" in os.listdir("."):
     network.load_weights(checkpoint_path)
   env = EevEnvironment(size=environment_size,
-                       initial_cell_count=starting_cell_count, network=network)
+                       initial_cell_count=starting_cell_count, network=network, batch_train=batch_train)
   for _ in range(100000):
     clear_screen()
     print("Total Energy: ", env.heat +
           sum([cell.energy for cell in env.cells]), "\nStep: ", _ + 1, "\nCells: ", len(env.cells))
     env.render()
-    env.step(train=True)
-    # time.sleep(0.5)
+    env.step(train=True if _ % train_interval == 0 else False)
 
 
 if __name__ == "__main__":
